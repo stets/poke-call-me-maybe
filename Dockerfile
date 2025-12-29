@@ -17,7 +17,7 @@ RUN npm install
 RUN npm install -g supergateway telnyx-mcp
 
 # Copy server code
-COPY server.js ./
+COPY server.js mcp-wrapper.js ./
 
 EXPOSE 3000
 

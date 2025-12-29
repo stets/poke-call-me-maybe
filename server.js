@@ -11,35 +11,21 @@ const SUPERGATEWAY_PORT = 8000;
 
 // Start supergateway as child process
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY;
-const TELNYX_PUBLIC_KEY = process.env.TELNYX_PUBLIC_KEY;
+const TELNYX_PUBLIC_KEY = process.env.TELNYX_PUBLIC_KEY || '';
 if (!TELNYX_API_KEY) {
   console.error('ERROR: TELNYX_API_KEY environment variable is required');
   process.exit(1);
 }
 if (!TELNYX_PUBLIC_KEY) {
-  console.error('ERROR: TELNYX_PUBLIC_KEY environment variable is required');
-  process.exit(1);
+  console.warn('WARNING: TELNYX_PUBLIC_KEY not set - webhook signature verification disabled');
 }
 
 console.log(`[auth-proxy] Starting supergateway on internal port ${SUPERGATEWAY_PORT}...`);
 
-// Only expose essential call control tools to avoid overwhelming the client
-const ALLOWED_TOOLS = [
-  'dial_calls',
-  'speak_calls_actions',
-  'hangup_calls_actions',
-  'list_call_control_applications',
-  'retrieve_status_calls',
-  'answer_calls_actions',
-  'start_playback_calls_actions',
-  'send_dtmf_calls_actions'
-];
-
-const telnyxMcpCmd = `npx -y telnyx-mcp ${ALLOWED_TOOLS.map(t => `--tool="${t}"`).join(' ')}`;
-
+// Use our custom MCP wrapper that adds call_and_speak tool
 const supergateway = spawn('npx', [
   'supergateway',
-  '--stdio', telnyxMcpCmd,
+  '--stdio', 'node mcp-wrapper.js',
   '--port', String(SUPERGATEWAY_PORT),
   '--host', '127.0.0.1',
   '--cors'
