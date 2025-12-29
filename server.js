@@ -12,12 +12,18 @@ const SUPERGATEWAY_PORT = 8000;
 // Start supergateway as child process
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY;
 const TELNYX_PUBLIC_KEY = process.env.TELNYX_PUBLIC_KEY || '';
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || '';
+const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL'; // Default: Sarah
+
 if (!TELNYX_API_KEY) {
   console.error('ERROR: TELNYX_API_KEY environment variable is required');
   process.exit(1);
 }
 if (!TELNYX_PUBLIC_KEY) {
   console.warn('WARNING: TELNYX_PUBLIC_KEY not set - webhook signature verification disabled');
+}
+if (!ELEVENLABS_API_KEY) {
+  console.warn('WARNING: ELEVENLABS_API_KEY not set - using Telnyx built-in TTS (lower quality)');
 }
 
 console.log(`[auth-proxy] Starting supergateway on internal port ${SUPERGATEWAY_PORT}...`);
@@ -125,27 +131,124 @@ app.post('/webhook', express.json(), async (req, res) => {
     console.log(`[webhook] Speaking message: "${message}"`);
 
     try {
-      const response = await fetch(`https://api.telnyx.com/v2/calls/${callControlId}/actions/speak`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${TELNYX_API_KEY}`
-        },
-        body: JSON.stringify({
-          payload: message,
-          voice: 'female',
-          language: 'en-US'
-        })
-      });
+      // Use Eleven Labs if available, otherwise fall back to Telnyx TTS
+      if (ELEVENLABS_API_KEY) {
+        console.log(`[webhook] Using Eleven Labs TTS...`);
 
-      if (response.ok) {
-        console.log(`[webhook] Speak command sent successfully`);
+        // Generate audio with Eleven Labs
+        const elevenLabsResponse = await fetch(
+          `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'xi-api-key': ELEVENLABS_API_KEY
+            },
+            body: JSON.stringify({
+              text: message,
+              model_id: 'eleven_turbo_v2_5',
+              output_format: 'mp3_44100_128',
+              voice_settings: {
+                stability: 0.5,
+                similarity_boost: 0.75
+              }
+            })
+          }
+        );
+
+        if (!elevenLabsResponse.ok) {
+          const error = await elevenLabsResponse.text();
+          throw new Error(`Eleven Labs API failed: ${elevenLabsResponse.status} - ${error}`);
+        }
+
+        // Get audio as buffer and convert to base64
+        const audioBuffer = await elevenLabsResponse.arrayBuffer();
+        const audioBase64 = Buffer.from(audioBuffer).toString('base64');
+        console.log(`[webhook] Generated ${audioBuffer.byteLength} bytes of audio`);
+
+        // Upload audio to Telnyx media storage using multipart form
+        const mediaName = `elevenlabs-${Date.now()}.mp3`;
+        const boundary = '----TelnyxBoundary' + Date.now();
+        const audioData = Buffer.from(audioBuffer);
+
+        // Build multipart form data manually
+        const formParts = [
+          `--${boundary}\r\n`,
+          `Content-Disposition: form-data; name="media_name"\r\n\r\n`,
+          `${mediaName}\r\n`,
+          `--${boundary}\r\n`,
+          `Content-Disposition: form-data; name="media"; filename="${mediaName}"\r\n`,
+          `Content-Type: audio/mpeg\r\n\r\n`
+        ];
+
+        const formStart = Buffer.from(formParts.join(''));
+        const formEnd = Buffer.from(`\r\n--${boundary}--\r\n`);
+        const formBody = Buffer.concat([formStart, audioData, formEnd]);
+
+        const uploadResponse = await fetch(
+          'https://api.telnyx.com/v2/media',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': `multipart/form-data; boundary=${boundary}`,
+              'Authorization': `Bearer ${TELNYX_API_KEY}`
+            },
+            body: formBody
+          }
+        );
+
+        if (!uploadResponse.ok) {
+          const error = await uploadResponse.text();
+          throw new Error(`Media upload failed: ${uploadResponse.status} - ${error}`);
+        }
+
+        console.log(`[webhook] Uploaded audio as ${mediaName}`);
+
+        // Play audio via Telnyx
+        const playbackResponse = await fetch(
+          `https://api.telnyx.com/v2/calls/${callControlId}/actions/playback_start`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${TELNYX_API_KEY}`
+            },
+            body: JSON.stringify({
+              media_name: mediaName
+            })
+          }
+        );
+
+        if (playbackResponse.ok) {
+          console.log(`[webhook] Eleven Labs audio playback started`);
+        } else {
+          const error = await playbackResponse.text();
+          console.error(`[webhook] Playback failed: ${playbackResponse.status} - ${error}`);
+        }
       } else {
-        const error = await response.text();
-        console.error(`[webhook] Speak command failed: ${response.status} - ${error}`);
+        // Fallback to Telnyx built-in TTS
+        const response = await fetch(`https://api.telnyx.com/v2/calls/${callControlId}/actions/speak`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${TELNYX_API_KEY}`
+          },
+          body: JSON.stringify({
+            payload: message,
+            voice: 'female',
+            language: 'en-US'
+          })
+        });
+
+        if (response.ok) {
+          console.log(`[webhook] Telnyx TTS speak command sent successfully`);
+        } else {
+          const error = await response.text();
+          console.error(`[webhook] Speak command failed: ${response.status} - ${error}`);
+        }
       }
     } catch (e) {
-      console.error(`[webhook] Error calling speak API: ${e.message}`);
+      console.error(`[webhook] Error in TTS: ${e.message}`);
     }
   }
 

@@ -10,6 +10,8 @@ services:
       - TELNYX_API_KEY=${TELNYX_API_KEY}
       - TELNYX_PUBLIC_KEY=${TELNYX_PUBLIC_KEY}
       - MCP_API_KEY=${MCP_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      - ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID:-}
       - PORT=3003
     restart: unless-stopped
     healthcheck:
