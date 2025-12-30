@@ -14,6 +14,7 @@ const TELNYX_API_KEY = process.env.TELNYX_API_KEY;
 const TELNYX_PUBLIC_KEY = process.env.TELNYX_PUBLIC_KEY || '';
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || '';
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL'; // Default: Sarah
+const ENABLE_TRANSCRIPTION = process.env.ENABLE_TRANSCRIPTION === 'true'; // Transcribe calls to detect voicemail vs human
 
 if (!TELNYX_API_KEY) {
   console.error('ERROR: TELNYX_API_KEY environment variable is required');
@@ -25,12 +26,32 @@ if (!TELNYX_PUBLIC_KEY) {
 if (!ELEVENLABS_API_KEY) {
   console.warn('WARNING: ELEVENLABS_API_KEY not set - using Telnyx built-in TTS (lower quality)');
 }
+if (ENABLE_TRANSCRIPTION) {
+  console.log('Transcription-based voicemail detection: ENABLED');
+} else {
+  console.log('Transcription-based voicemail detection: DISABLED (set ENABLE_TRANSCRIPTION=true to enable)');
+}
 
 // Store AMD results by call_control_id
 const amdResults = new Map();
 
+// Store transcription text by call_control_id
+const transcriptions = new Map();
+
 // Store final call results (for check_call_result tool)
 const callResults = new Map();
+
+// Voicemail detection patterns
+const VOICEMAIL_PATTERNS = [
+  /leave\s*(a\s*)?(message|voicemail)/i,
+  /not\s*(available|here)/i,
+  /after\s*the\s*(tone|beep)/i,
+  /reached\s*(the\s*)?(voicemail|mailbox)/i,
+  /please\s*leave/i,
+  /call\s*you\s*back/i,
+  /can't\s*(come|get)\s*to\s*the\s*phone/i,
+  /at\s*the\s*tone/i
+];
 
 console.log(`[auth-proxy] Starting supergateway on internal port ${SUPERGATEWAY_PORT}...`);
 
@@ -150,14 +171,46 @@ app.post('/webhook', express.json(), async (req, res) => {
     });
   }
 
-  // Handle call.hangup - finalize call result
+  // Handle transcription events
+  if (eventType === 'call.transcription' && callControlId) {
+    const text = event.payload?.transcription_data?.transcript || '';
+    if (text) {
+      const existing = transcriptions.get(callControlId) || '';
+      transcriptions.set(callControlId, existing + ' ' + text);
+      console.log(`[webhook] Transcription: "${text}"`);
+    }
+  }
+
+  // Handle call.hangup - finalize call result with transcription analysis
   if (eventType === 'call.hangup' && callControlId) {
     const existing = callResults.get(callControlId) || {};
+
+    // Analyze transcription if available
+    let transcriptionResult = null;
+    const transcriptionText = transcriptions.get(callControlId);
+    if (transcriptionText) {
+      console.log(`[webhook] Full transcription: "${transcriptionText.trim()}"`);
+
+      // Check for voicemail patterns
+      const isVoicemail = VOICEMAIL_PATTERNS.some(pattern => pattern.test(transcriptionText));
+      transcriptionResult = {
+        text: transcriptionText.trim(),
+        detected_as: isVoicemail ? 'voicemail' : 'human'
+      };
+      console.log(`[webhook] Transcription analysis: ${transcriptionResult.detected_as.toUpperCase()}`);
+
+      // Clean up transcription
+      transcriptions.delete(callControlId);
+    }
+
     callResults.set(callControlId, {
       ...existing,
       status: 'completed',
       hangup_cause: event.payload?.hangup_cause,
-      completed_at: new Date().toISOString()
+      completed_at: new Date().toISOString(),
+      transcription: transcriptionResult,
+      // Override answered_by if transcription is more reliable
+      answered_by: transcriptionResult ? transcriptionResult.detected_as : existing.answered_by
     });
     console.log(`[webhook] Call completed: ${JSON.stringify(callResults.get(callControlId))}`);
 
@@ -169,9 +222,39 @@ app.post('/webhook', express.json(), async (req, res) => {
   if (eventType === 'call.answered' && callControlId) {
     const amdResult = amdResults.get(callControlId);
     if (amdResult) {
-      console.log(`[webhook] Call answered by: ${amdResult.toUpperCase()}`);
+      console.log(`[webhook] Call answered by (AMD): ${amdResult.toUpperCase()}`);
       amdResults.delete(callControlId);
     }
+
+    // Start transcription if enabled (to detect voicemail vs human)
+    if (ENABLE_TRANSCRIPTION) {
+      console.log(`[webhook] Starting transcription for voicemail detection...`);
+      try {
+        const transcriptionResponse = await fetch(
+          `https://api.telnyx.com/v2/calls/${callControlId}/actions/transcription_start`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${TELNYX_API_KEY}`
+            },
+            body: JSON.stringify({
+              language: 'en',
+              transcription_tracks: 'inbound' // Only transcribe what the other party says
+            })
+          }
+        );
+        if (transcriptionResponse.ok) {
+          console.log(`[webhook] Transcription started`);
+        } else {
+          const error = await transcriptionResponse.text();
+          console.error(`[webhook] Transcription start failed: ${error}`);
+        }
+      } catch (e) {
+        console.error(`[webhook] Error starting transcription: ${e.message}`);
+      }
+    }
+
     let message = 'Hello, this is a call from your AI assistant.';
 
     // Decode client_state if present

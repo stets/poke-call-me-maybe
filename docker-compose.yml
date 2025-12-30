@@ -12,6 +12,7 @@ services:
       - MCP_API_KEY=${MCP_API_KEY}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
       - ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID:-}
+      - ENABLE_TRANSCRIPTION=${ENABLE_TRANSCRIPTION:-false}
       - PORT=3003
     restart: unless-stopped
     healthcheck:
