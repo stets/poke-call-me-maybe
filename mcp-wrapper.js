@@ -302,7 +302,7 @@ class MCPWrapper {
             to,
             from,
             client_state: clientState,
-            answering_machine_detection: 'detect'  // Enable AMD
+            answering_machine_detection: 'detect_beep'  // Wait for voicemail beep to confirm
           }
         }
       };
