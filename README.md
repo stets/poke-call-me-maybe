@@ -1,30 +1,29 @@
 # Telnyx MCP Server with Voice Calls
 
-A Docker-ready MCP (Model Context Protocol) server that enables AI assistants to make phone calls with text-to-speech messages. Built on top of [Telnyx](https://telnyx.com) with optional [Eleven Labs](https://elevenlabs.io) integration for high-quality voices.
+A Docker-ready MCP (Model Context Protocol) server that enables AI assistants to make phone calls with text-to-speech messages **and have two-way AI conversations**. Built on [Telnyx](https://telnyx.com) with [Eleven Labs](https://elevenlabs.io) for natural voices and [Claude AI](https://anthropic.com) for conversations.
 
 ## Features
 
-- **`call_and_speak` Tool** - Simple tool for AI assistants to make calls with voice messages
-- **`check_call_result` Tool** - Check if a call was answered by a human or went to voicemail
-- **Voicemail Detection** - Uses transcription to reliably detect voicemail vs human
-- **Eleven Labs TTS** - Natural-sounding voices (optional, falls back to Telnyx TTS)
-- **Bearer Token Auth** - Secure API key protection for your MCP endpoint
-- **SSE Transport** - HTTP-accessible MCP server for easy integration
-- **Webhook Handler** - Automatically speaks message when call is answered
-- **Auto-Hangup** - Hangs up after message plays (no 2-minute voicemails!)
+### Voice Calls
+- **`call_and_speak`** - Make calls with a one-way voice message
+- **`call_and_converse`** - Have a two-way AI conversation on the phone
+- **`check_call_result`** - Get transcripts and conversation history
+- **Eleven Labs TTS** - Natural-sounding voices (Charlotte default)
+- **Fast TTS Mode** - Option to use Telnyx built-in TTS for lower latency
+
+### Two-Way Conversations
+- **Claude AI Integration** - Powered by Claude Haiku for fast responses
+- **Real-time Transcription** - Hear what the caller says
+- **Barge-in Support** - Interrupt the AI while it's speaking
+- **Natural Turn-Taking** - Waits for caller to speak first, then responds
+- **Short Responses** - Optimized for voice (1-2 sentences)
+
+### Infrastructure
+- **Bearer Token Auth** - Secure API key protection
+- **SSE Transport** - HTTP-accessible MCP server
+- **Webhook Handler** - Processes Telnyx call events
+- **Voicemail Detection** - Transcription-based detection
 - **Docker Ready** - Easy deployment with Docker Compose
-
-## How It Works
-
-```
-AI Assistant calls call_and_speak(to, from, message)
-    ↓
-Server dials the number via Telnyx
-    ↓
-When call is answered, webhook triggers
-    ↓
-Eleven Labs generates audio → Telnyx plays it
-```
 
 ## Quick Start
 
@@ -34,29 +33,40 @@ Eleven Labs generates audio → Telnyx plays it
 - [Telnyx account](https://telnyx.com) with:
   - API Key
   - Phone number
-  - Call Control Application (with webhook URL pointed to your server)
-- [Eleven Labs account](https://elevenlabs.io) (optional, for better voices)
+  - Call Control Application (webhook URL pointed to your server)
+- [Eleven Labs account](https://elevenlabs.io) for high-quality voices
+- [Anthropic account](https://console.anthropic.com) for two-way conversations (optional)
 
 ### Setup
 
 1. Clone the repo:
 ```bash
-git clone https://github.com/stets/poke-call-me-maybe.git
-cd poke-call-me-maybe
+git clone https://github.com/yourusername/telnyx-mcp-server.git
+cd telnyx-mcp-server
 ```
 
 2. Create `.env` file:
 ```bash
+# Required
 TELNYX_API_KEY=your-telnyx-api-key
-MCP_API_KEY=your-secure-random-key  # Generate with: openssl rand -hex 32
+MCP_API_KEY=your-secure-random-key  # Generate: openssl rand -hex 32
 
-# Optional: Eleven Labs for better voice quality
+# For high-quality voices (recommended)
 ELEVENLABS_API_KEY=your-elevenlabs-key
-ELEVENLABS_VOICE_ID=pFZP5JQG7iQjIQuC4Bku  # Optional, defaults to Sarah
+ELEVENLABS_VOICE_ID=XB0fDUnXU5powFXDhCwa  # Charlotte (default)
+
+# For two-way AI conversations
+ANTHROPIC_API_KEY=your-anthropic-key
+ANTHROPIC_MODEL=claude-haiku-4-5-20251001
+
+# Optional settings
+ENABLE_TRANSCRIPTION=true   # Enable call transcription
+USE_FAST_TTS=false          # Use Telnyx TTS instead of Eleven Labs
 ```
 
 3. Build and run:
 ```bash
+docker compose build
 docker compose up -d
 ```
 
@@ -64,105 +74,93 @@ docker compose up -d
    - Go to your Call Control Application in Telnyx portal
    - Set webhook URL to: `https://your-server/webhook`
 
-## Available MCP Tools
+## MCP Tools
 
 | Tool | Description |
 |------|-------------|
-| `call_and_speak` | Make a call and speak a message when answered |
-| `check_call_result` | Check if a call was answered by human or voicemail |
-| `list_call_control_applications` | List your Telnyx call control apps (to get connection_id) |
+| `call_and_speak` | Make a call, play a message, wait for response, hang up |
+| `call_and_converse` | Make a call and have a multi-turn AI conversation |
+| `check_call_result` | Get transcript/conversation after call ends |
+| `list_call_control_applications` | List Telnyx apps (to get connection_id) |
 | `hangup_calls_actions` | Hang up an active call |
 
-### call_and_speak Parameters
+### call_and_speak
+
+Simple one-way call with a voice message.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `connection_id` | Yes | Your Call Control App ID |
-| `to` | Yes | Destination phone number (E.164 format: +15551234567) |
-| `from` | Yes | Your Telnyx phone number (E.164 format) |
-| `message` | Yes | Message to speak when call is answered |
+| `to` | Yes | Destination phone (+15551234567) |
+| `from` | Yes | Your Telnyx number (+15551234567) |
+| `message` | Yes | Message to speak when answered |
 
-### check_call_result Parameters
+**Timing**: Wait 45 seconds, then call `check_call_result`.
+
+### call_and_converse
+
+Two-way AI conversation on the phone.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `call_control_id` | Yes | The call_control_id returned from call_and_speak |
+| `connection_id` | Yes | Your Call Control App ID |
+| `to` | Yes | Destination phone (+15551234567) |
+| `from` | Yes | Your Telnyx number (+15551234567) |
+| `system_prompt` | Yes | Instructions for the AI personality |
+| `initial_message` | Yes | First message AI says when human speaks |
+| `max_turns` | No | Max conversation turns (default: 5) |
 
-Returns:
-- `answered_by`: `"human"` or `"voicemail"` (when transcription enabled)
+**Timing**: Wait 60-90 seconds (longer for more turns), then call `check_call_result`.
+
+**Example**:
+```
+system_prompt: "You are Poke, a friendly AI assistant. Be casual and fun."
+initial_message: "Hey! How's it going?"
+max_turns: 5
+```
+
+### check_call_result
+
+Get the result of a call after it ends.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `call_control_id` | Yes | ID returned from call_and_speak/call_and_converse |
+
+**Returns**:
 - `status`: `"in_progress"` or `"completed"`
-- `transcription`: The actual transcription text (if enabled)
+- `answered_by`: `"human"` or `"voicemail"`
+- `transcription.text`: What the person said
+- `conversation.messages`: Full conversation history (for call_and_converse)
 
-## Voicemail Detection
-
-The server can detect whether a call was answered by a human or went to voicemail.
-
-### Transcription-Based Detection (Recommended)
-
-When `ENABLE_TRANSCRIPTION=true`, the server:
-1. Transcribes the inbound audio when the call is answered
-2. Analyzes the transcription for voicemail phrases like "leave a message"
-3. Provides reliable detection with the actual transcript
-
-**Cost**: ~$0.0125 (1.25 cents) per 30 seconds of audio
-
-### AMD-Based Detection (Fallback)
-
-Answering Machine Detection (AMD) is enabled by default but is less reliable with modern smartphones. It may misclassify voicemail as human, especially with natural-sounding greetings.
-
-## API Endpoints
-
-| Endpoint | Auth | Description |
-|----------|------|-------------|
-| `GET /health` | No | Health check |
-| `POST /webhook` | No | Telnyx webhook receiver |
-| `GET /sse` | Yes | SSE connection for MCP |
-| `POST /message` | Yes | Send MCP messages |
-
-## Connecting MCP Clients
-
-### URL & Auth
-- **URL**: `https://your-server/sse`
-- **Transport**: SSE
-- **Header**: `Authorization: Bearer YOUR_MCP_API_KEY`
-
-### Example Usage (from AI assistant)
-
-```
-Call +1-555-123-4567 and say "Good morning! This is your wake-up call."
-```
-
-The AI will use `call_and_speak` with:
-- `to`: "+15551234567"
-- `from`: your Telnyx number
-- `message`: "Good morning! This is your wake-up call."
-
-## Eleven Labs Voices
-
-Set `ELEVENLABS_VOICE_ID` in `.env` to change voices:
-
-**Female:**
-- `EXAVITQu4vr4xnSDxMaL` - Sarah (default)
-- `21m00Tcm4TlvDq8ikWAM` - Rachel
-- `pFZP5JQG7iQjIQuC4Bku` - Lily
-
-**Male:**
-- `pNInz6obpgDQGcFmaJgB` - Adam
-- `yoZ06aMxZJJ28mfd3POQ` - Sam
-- `TxGEqnHWrfWFTfGW9XjX` - Josh
-
-Browse all voices: [elevenlabs.io/voice-library](https://elevenlabs.io/voice-library)
+**Important**: If status is not `"completed"`, wait 30 seconds and retry!
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `TELNYX_API_KEY` | Yes | Your Telnyx API key |
-| `MCP_API_KEY` | Yes | Bearer token for MCP authentication |
-| `ELEVENLABS_API_KEY` | No | Eleven Labs API key (for better voices) |
-| `ELEVENLABS_VOICE_ID` | No | Eleven Labs voice ID (default: Sarah) |
-| `ENABLE_TRANSCRIPTION` | No | Enable transcription-based voicemail detection (default: false) |
-| `PORT` | No | Server port (default: 3000) |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `TELNYX_API_KEY` | Yes | - | Telnyx API key |
+| `MCP_API_KEY` | Yes | - | Bearer token for MCP auth |
+| `ELEVENLABS_API_KEY` | No | - | Eleven Labs API key |
+| `ELEVENLABS_VOICE_ID` | No | Charlotte | Eleven Labs voice ID |
+| `ANTHROPIC_API_KEY` | No | - | Anthropic API key (for conversations) |
+| `ANTHROPIC_MODEL` | No | claude-haiku-4-5-20251001 | Claude model to use |
+| `ENABLE_TRANSCRIPTION` | No | false | Enable call transcription |
+| `USE_FAST_TTS` | No | false | Use Telnyx TTS (faster, lower quality) |
+| `PORT` | No | 3000 | Server port |
+
+## Eleven Labs Voices
+
+Set `ELEVENLABS_VOICE_ID` to change the voice:
+
+| Voice | ID | Style |
+|-------|-----|-------|
+| **Charlotte** | `XB0fDUnXU5powFXDhCwa` | Seductive, calm (default) |
+| Rachel | `21m00Tcm4TlvDq8ikWAM` | Calm, soothing |
+| Aria | `9BWtsMINqrJLrRacOk9x` | Expressive, warm |
+| Domi | `AZnzlk1XvdvUeBnXmlld` | Strong, confident |
+
+Browse all: [elevenlabs.io/voice-library](https://elevenlabs.io/voice-library)
 
 ## Architecture
 
@@ -173,26 +171,68 @@ Browse all voices: [elevenlabs.io/voice-library](https://elevenlabs.io/voice-lib
 └─────────────┘     └──────────────┘     └─────────────┘     └─────────────┘
                            │
                     ┌──────┴──────┐
-                    │   Webhook   │
-                    │  /webhook   │
+                    │   Webhook   │◀──── Telnyx Events
+                    │  /webhook   │      (answered, hangup, transcription)
                     └──────┬──────┘
-                           │ call.answered
-                           ▼
-                    ┌─────────────┐     ┌─────────────┐
-                    │ Eleven Labs │────▶│   Telnyx    │
-                    │     TTS     │     │  Playback   │
-                    └─────────────┘     └─────────────┘
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+        ┌──────────┐ ┌──────────┐ ┌──────────┐
+        │  Claude  │ │  Eleven  │ │  Telnyx  │
+        │   API    │ │  Labs    │ │ Playback │
+        │(respond) │ │  (TTS)   │ │ (audio)  │
+        └──────────┘ └──────────┘ └──────────┘
 ```
 
-## Exposing Publicly
+### Conversation Flow
 
-### With ngrok (development)
+1. AI calls `call_and_converse` with phone number and prompts
+2. Server dials via Telnyx, starts transcription
+3. Waits for human to say hello
+4. Plays initial message via Eleven Labs
+5. Transcribes human response (with silence detection)
+6. Claude generates reply, speaks it
+7. Repeat until max_turns or hangup
+8. Full transcript saved for `check_call_result`
+
+## API Endpoints
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /health` | No | Health check |
+| `POST /webhook` | No | Telnyx webhook receiver |
+| `GET /sse` | Yes | SSE connection for MCP |
+| `POST /message` | Yes | Send MCP messages |
+| `GET /call-result/:id` | No | Get call result (internal) |
+
+## Development
+
 ```bash
-ngrok http 3000
+# View logs
+docker compose logs -f
+
+# Rebuild after changes
+docker compose build && docker compose up -d
+
+# Restart
+docker compose restart
 ```
 
-### Production
-Use a reverse proxy (Traefik, Nginx, Caddy) with HTTPS.
+### Local Development with ngrok
+
+```bash
+ngrok http 3003
+# Update Telnyx webhook URL with ngrok URL
+```
+
+## Costs
+
+- **Telnyx calls**: ~$0.01/min
+- **Telnyx transcription**: ~$0.025/min
+- **Eleven Labs TTS**: ~$0.30/1000 chars
+- **Claude Haiku**: ~$0.25/1M input tokens
+
+A typical 5-turn conversation costs roughly $0.05-0.10.
 
 ## License
 

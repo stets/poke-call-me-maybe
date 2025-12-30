@@ -18,26 +18,25 @@ const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3003';
 const CUSTOM_TOOLS = {
   check_call_result: {
     name: 'check_call_result',
-    description: `Check what happened on a call and get the transcription of what the person said.
+    description: `Check what happened on a call and get the transcription/conversation.
 
-IMPORTANT: You MUST call this after every call_and_speak to see the result!
-Wait at least 45 seconds after initiating the call, then check.
+TIMING IS CRITICAL:
+- For call_and_speak: Wait at least 45 seconds before checking
+- For call_and_converse: Wait at least 60-90 seconds (longer for more turns)
+
+If result shows "not found" or status is "in_progress", the call isn't done yet!
+Wait another 30 seconds and try again. Keep retrying until status is "completed".
 
 Returns:
+- status: 'in_progress' or 'completed' (MUST be 'completed' to have full data)
 - answered_by: 'human' or 'voicemail'
-- status: 'in_progress' or 'completed'
-- transcription.text: What the person said (their actual words!)
+- transcription.text: What the person said
+- conversation.messages: Full back-and-forth (for call_and_converse)
 - hangup_cause: reason the call ended
 
-Example workflow:
-1. Call call_and_speak to make the call
-2. Wait 45 seconds
-3. Call check_call_result with the call_control_id
-4. Read the transcription to see what they said!
-
 Use cases:
-- Wake-up call: Check if they answered. If voicemail, shame them!
-- Any call: See exactly what the person said in response`,
+- Wake-up call: Check if they answered and what they said
+- Conversation: Get the full transcript of the multi-turn chat`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -100,16 +99,18 @@ Then wait 45 seconds and call check_call_result with the call_control_id.`,
 
 This is different from call_and_speak - instead of just playing a message, the AI will:
 1. Dial the number
-2. Say the initial_message when answered
-3. Listen for the person's response
-4. Generate an AI reply based on the system_prompt
-5. Continue back-and-forth up to max_turns
-6. Hang up automatically
+2. Wait for the person to say hello first
+3. Say the initial_message when they greet
+4. Listen for their response
+5. Generate an AI reply based on the system_prompt
+6. Continue back-and-forth up to max_turns
+7. Hang up automatically
 
 The conversation uses Claude AI to generate responses, with Eleven Labs for voice.
 
-IMPORTANT: After calling this, wait until the call ends (varies based on conversation length),
-then call check_call_result to get the full conversation transcript!
+CRITICAL TIMING: You MUST wait at least 60-90 seconds after calling this before using check_call_result.
+Each conversation turn takes ~15 seconds. For a 5-turn call, wait at least 90 seconds.
+If check_call_result returns "in_progress" or "not found", wait another 30 seconds and try again.
 
 Example - Wake up call with conversation:
 - system_prompt: "You are a friendly wake-up assistant. Be encouraging but firm about waking up."
@@ -303,6 +304,11 @@ class MCPWrapper {
 
   handleToolCall(message) {
     const toolName = message.params?.name;
+    const args = message.params?.arguments || {};
+
+    // Log tool call
+    process.stderr.write(`[mcp-wrapper] Tool called: ${toolName}\n`);
+    process.stderr.write(`[mcp-wrapper] Arguments: ${JSON.stringify(args, null, 2)}\n`);
 
     if (CUSTOM_TOOLS[toolName]) {
       this.handleCustomToolCall(message);
@@ -329,14 +335,19 @@ class MCPWrapper {
         throw new Error(`Unknown custom tool: ${toolName}`);
       }
 
+      const responseText = JSON.stringify(result, null, 2);
+      process.stderr.write(`[mcp-wrapper] Response for ${toolName}: ${responseText.substring(0, 500)}${responseText.length > 500 ? '...' : ''}\n`);
+
       this.sendToClient({
         jsonrpc: '2.0',
         id: message.id,
         result: {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
+          content: [{ type: 'text', text: responseText }]
         }
       });
     } catch (err) {
+      process.stderr.write(`[mcp-wrapper] Error in ${toolName}: ${err.message}\n`);
+
       this.sendToClient({
         jsonrpc: '2.0',
         id: message.id,

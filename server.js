@@ -53,7 +53,36 @@ const callResults = new Map();
 const activeConversations = new Map();
 
 // Silence detection timeout (ms) - how long to wait after speech stops before responding
-const SILENCE_TIMEOUT = 2500; // 2.5 seconds
+const SILENCE_TIMEOUT = 1500; // 1.5 seconds - faster response
+
+// Helper: Stop any active playback on a call (for barge-in)
+async function stopPlayback(callControlId) {
+  try {
+    const response = await fetch(
+      `https://api.telnyx.com/v2/calls/${callControlId}/actions/playback_stop`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${TELNYX_API_KEY}`
+        },
+        body: JSON.stringify({})
+      }
+    );
+
+    if (response.ok) {
+      console.log(`[barge-in] Stopped playback for ${callControlId}`);
+      return true;
+    } else {
+      const error = await response.text();
+      console.log(`[barge-in] Failed to stop playback: ${error}`);
+      return false;
+    }
+  } catch (e) {
+    console.log(`[barge-in] Error stopping playback: ${e.message}`);
+    return false;
+  }
+}
 
 // Voicemail detection patterns
 const VOICEMAIL_PATTERNS = [
@@ -69,6 +98,9 @@ const VOICEMAIL_PATTERNS = [
 
 // Helper: Call Anthropic API
 async function callAnthropic(systemPrompt, messages) {
+  // Prepend instruction for concise voice responses
+  const voiceSystemPrompt = `You are having a phone conversation. Keep responses SHORT - 1-2 sentences max. Be natural and conversational but brief.\n\n${systemPrompt}`;
+
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -78,8 +110,8 @@ async function callAnthropic(systemPrompt, messages) {
     },
     body: JSON.stringify({
       model: ANTHROPIC_MODEL,
-      max_tokens: 300, // Keep responses short for voice
-      system: systemPrompt,
+      max_tokens: 100, // Very short for voice - 1-2 sentences
+      system: voiceSystemPrompt,
       messages: messages
     })
   });
@@ -93,11 +125,39 @@ async function callAnthropic(systemPrompt, messages) {
   return data.content[0].text;
 }
 
-// Helper: Generate Eleven Labs audio and play it on a call
-async function generateAndPlayAudio(callControlId, text) {
-  console.log(`[converse] Generating audio for: "${text.substring(0, 50)}..."`);
+// Use fast TTS (Telnyx built-in) vs quality TTS (Eleven Labs)
+const USE_FAST_TTS = process.env.USE_FAST_TTS === 'true';
 
-  // Generate audio with Eleven Labs
+// Helper: Play audio on a call (fast mode = Telnyx TTS, quality mode = Eleven Labs)
+async function generateAndPlayAudio(callControlId, text) {
+  console.log(`[converse] Speaking: "${text.substring(0, 50)}..." (${USE_FAST_TTS ? 'fast' : 'quality'} mode)`);
+
+  if (USE_FAST_TTS) {
+    // Fast mode: Use Telnyx built-in TTS (no upload needed)
+    const speakResponse = await fetch(
+      `https://api.telnyx.com/v2/calls/${callControlId}/actions/speak`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${TELNYX_API_KEY}`
+        },
+        body: JSON.stringify({
+          payload: text,
+          voice: 'female',
+          language: 'en-US'
+        })
+      }
+    );
+
+    if (!speakResponse.ok) {
+      const error = await speakResponse.text();
+      throw new Error(`Speak failed: ${speakResponse.status} - ${error}`);
+    }
+    return;
+  }
+
+  // Quality mode: Eleven Labs TTS + upload to Telnyx
   const elevenLabsResponse = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
     {
@@ -199,6 +259,25 @@ async function processConversationTurn(callControlId) {
 
   console.log(`[converse] User said: "${userText}"`);
 
+  // Handle first turn - user said hello, now we respond with initial message
+  if (convo.waitingForFirstWord) {
+    console.log(`[converse] First turn - responding with initial greeting`);
+    convo.waitingForFirstWord = false;
+    convo.pendingTranscript = '';
+
+    // Add user's greeting and our initial message to history
+    convo.messages.push({ role: 'user', content: userText });
+    convo.messages.push({ role: 'assistant', content: convo.initialMessage });
+
+    try {
+      convo.isPlayingAudio = true;
+      await generateAndPlayAudio(callControlId, convo.initialMessage);
+    } catch (e) {
+      console.error(`[converse] Error playing initial message: ${e.message}`);
+    }
+    return;
+  }
+
   // Add to conversation history
   convo.messages.push({ role: 'user', content: userText });
   convo.pendingTranscript = '';
@@ -266,7 +345,6 @@ supergateway.on('close', (code) => {
 // Wait for supergateway to start
 setTimeout(() => {
   console.log(`[auth-proxy] API Key authentication enabled`);
-  console.log(`[auth-proxy] Your API Key: ${API_KEY}`);
   console.log(`[auth-proxy] Listening on port ${PORT}`);
 }, 3000);
 
@@ -363,7 +441,10 @@ app.post('/webhook', express.json(), async (req, res) => {
   const callControlId = event.payload?.call_control_id;
   const clientStateBase64 = event.payload?.client_state;
 
-  console.log(`[webhook] Received event: ${eventType}`);
+  // Don't log noisy transcription events
+  if (eventType !== 'call.transcription') {
+    console.log(`[webhook] Received event: ${eventType}`);
+  }
 
   // Handle AMD result - store it for when call.answered fires
   if (eventType === 'call.machine.detection.ended' && callControlId) {
@@ -381,17 +462,34 @@ app.post('/webhook', express.json(), async (req, res) => {
 
   // Handle transcription events
   if (eventType === 'call.transcription' && callControlId) {
-    const text = event.payload?.transcription_data?.transcript || '';
-    if (text) {
-      const existing = transcriptions.get(callControlId) || '';
-      transcriptions.set(callControlId, existing + ' ' + text);
-      console.log(`[webhook] Transcription: "${text}"`);
+    const transcriptionData = event.payload?.transcription_data || {};
+    const text = transcriptionData.transcript || '';
+    const isFinal = transcriptionData.is_final !== false; // Treat as final unless explicitly marked interim
 
-      // If this is a conversation, handle silence detection
+    if (text) {
+      // For final transcription log, accumulate the full history
+      if (isFinal) {
+        const existing = transcriptions.get(callControlId) || '';
+        transcriptions.set(callControlId, existing + ' ' + text);
+      }
+
+      // Only log occasionally to reduce noise
+      if (isFinal || !activeConversations.has(callControlId)) {
+        console.log(`[webhook] Transcription${isFinal ? '' : ' (interim)'}: "${text}"`);
+      }
+
+      // If this is a conversation, handle it
       const convo = activeConversations.get(callControlId);
-      if (convo && !convo.isPlayingAudio) {
-        // Accumulate transcript
-        convo.pendingTranscript = (convo.pendingTranscript || '') + ' ' + text;
+      if (convo) {
+        // BARGE-IN: If audio is playing and user speaks, stop the playback
+        if (convo.isPlayingAudio) {
+          console.log(`[barge-in] User speaking while audio playing - interrupting`);
+          stopPlayback(callControlId);
+          convo.isPlayingAudio = false;
+        }
+
+        // REPLACE pending transcript (interim results are cumulative, not incremental)
+        convo.pendingTranscript = text;
 
         // Reset silence timer
         if (convo.silenceTimer) {
@@ -486,7 +584,8 @@ app.post('/webhook', express.json(), async (req, res) => {
             },
             body: JSON.stringify({
               language: 'en',
-              transcription_tracks: 'inbound' // Only transcribe what the other party says
+              transcription_tracks: 'inbound', // Only transcribe what the other party says
+              interim_results: true // Enable real-time transcription for barge-in
             })
           }
         );
@@ -503,17 +602,23 @@ app.post('/webhook', express.json(), async (req, res) => {
 
     // Handle conversation mode
     if (convo) {
-      console.log(`[converse] Call answered, starting conversation...`);
-      convo.isPlayingAudio = true;
+      console.log(`[converse] Call answered, waiting for user to speak first...`);
+      // Don't play initial message immediately - wait for user to say hello
+      // The initial message will be played as the first AI response after user speaks
+      convo.waitingForFirstWord = true;
+      convo.isPlayingAudio = false;
 
-      // Add initial message to history
-      convo.messages.push({ role: 'assistant', content: convo.initialMessage });
+      // Store initial call result so check_call_result works during the call
+      callResults.set(callControlId, {
+        status: 'in_progress',
+        answered_at: new Date().toISOString(),
+        answered_by: 'human',
+        conversation: {
+          messages: [],
+          turns: 0
+        }
+      });
 
-      try {
-        await generateAndPlayAudio(callControlId, convo.initialMessage);
-      } catch (e) {
-        console.error(`[converse] Error playing initial message: ${e.message}`);
-      }
       return res.sendStatus(200);
     }
 
