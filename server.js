@@ -290,6 +290,34 @@ app.post('/webhook', express.json(), async (req, res) => {
     }
   }
 
+  // Handle playback/speak ended - hang up the call
+  if ((eventType === 'call.playback.ended' || eventType === 'call.speak.ended') && callControlId) {
+    console.log(`[webhook] Audio finished, hanging up call...`);
+
+    try {
+      const hangupResponse = await fetch(
+        `https://api.telnyx.com/v2/calls/${callControlId}/actions/hangup`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${TELNYX_API_KEY}`
+          },
+          body: JSON.stringify({})
+        }
+      );
+
+      if (hangupResponse.ok) {
+        console.log(`[webhook] Call hung up successfully`);
+      } else {
+        const error = await hangupResponse.text();
+        console.error(`[webhook] Hangup failed: ${hangupResponse.status} - ${error}`);
+      }
+    } catch (e) {
+      console.error(`[webhook] Error hanging up: ${e.message}`);
+    }
+  }
+
   // Always respond 200 to acknowledge receipt
   res.sendStatus(200);
 });
