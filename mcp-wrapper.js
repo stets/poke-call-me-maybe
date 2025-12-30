@@ -93,6 +93,58 @@ Then wait 45 seconds and call check_call_result with the call_control_id.`,
       },
       required: ['connection_id', 'to', 'from', 'message']
     }
+  },
+  call_and_converse: {
+    name: 'call_and_converse',
+    description: `Make an outbound phone call and have a two-way AI conversation.
+
+This is different from call_and_speak - instead of just playing a message, the AI will:
+1. Dial the number
+2. Say the initial_message when answered
+3. Listen for the person's response
+4. Generate an AI reply based on the system_prompt
+5. Continue back-and-forth up to max_turns
+6. Hang up automatically
+
+The conversation uses Claude AI to generate responses, with Eleven Labs for voice.
+
+IMPORTANT: After calling this, wait until the call ends (varies based on conversation length),
+then call check_call_result to get the full conversation transcript!
+
+Example - Wake up call with conversation:
+- system_prompt: "You are a friendly wake-up assistant. Be encouraging but firm about waking up."
+- initial_message: "Good morning! Time to wake up. How are you feeling?"
+- max_turns: 5`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        connection_id: {
+          type: 'string',
+          description: 'The ID of the Call Control App to use for the call'
+        },
+        to: {
+          type: 'string',
+          description: 'The destination phone number in E.164 format (e.g., +15551234567)'
+        },
+        from: {
+          type: 'string',
+          description: 'The Telnyx phone number to call from in E.164 format'
+        },
+        system_prompt: {
+          type: 'string',
+          description: 'Instructions for the AI on how to behave during the conversation'
+        },
+        initial_message: {
+          type: 'string',
+          description: 'The first message to say when the call is answered'
+        },
+        max_turns: {
+          type: 'number',
+          description: 'Maximum number of back-and-forth exchanges (default: 5)'
+        }
+      },
+      required: ['connection_id', 'to', 'from', 'system_prompt', 'initial_message']
+    }
   }
 };
 
@@ -271,6 +323,8 @@ class MCPWrapper {
         result = await this.callAndSpeak(args);
       } else if (toolName === 'check_call_result') {
         result = await this.checkCallResult(args);
+      } else if (toolName === 'call_and_converse') {
+        result = await this.callAndConverse(args);
       } else {
         throw new Error(`Unknown custom tool: ${toolName}`);
       }
@@ -393,6 +447,90 @@ class MCPWrapper {
     } catch (e) {
       throw new Error(`Failed to check call result: ${e.message}`);
     }
+  }
+
+  callAndConverse(args) {
+    return new Promise((resolve, reject) => {
+      const { connection_id, to, from, system_prompt, initial_message, max_turns } = args;
+
+      if (!connection_id || !to || !from || !system_prompt || !initial_message) {
+        reject(new Error('Missing required parameters: connection_id, to, from, system_prompt, initial_message'));
+        return;
+      }
+
+      // First, dial the call
+      const dialRequest = {
+        jsonrpc: '2.0',
+        id: this.requestId++,
+        method: 'tools/call',
+        params: {
+          name: 'dial_calls',
+          arguments: {
+            connection_id,
+            to,
+            from
+            // No client_state needed - we'll use the conversation endpoint
+          }
+        }
+      };
+
+      this.pendingRequests.set(dialRequest.id, {
+        originalId: null,
+        callback: async (response) => {
+          if (response.result?.isError) {
+            reject(new Error(response.result.content?.[0]?.text || 'dial_calls failed'));
+          } else {
+            // Extract call_control_id
+            let call_control_id = null;
+            try {
+              const content = response.result?.content?.[0]?.text;
+              if (content) {
+                const parsed = JSON.parse(content);
+                call_control_id = parsed?.data?.call_control_id;
+              }
+            } catch (e) {
+              // Ignore parse errors
+            }
+
+            if (!call_control_id) {
+              reject(new Error('Could not get call_control_id from dial response'));
+              return;
+            }
+
+            // Register the conversation with the server
+            try {
+              const registerResponse = await fetch(`${SERVER_URL}/start-conversation`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  callControlId: call_control_id,
+                  systemPrompt: system_prompt,
+                  initialMessage: initial_message,
+                  maxTurns: max_turns || 5
+                })
+              });
+
+              if (!registerResponse.ok) {
+                const error = await registerResponse.text();
+                reject(new Error(`Failed to register conversation: ${error}`));
+                return;
+              }
+
+              resolve({
+                success: true,
+                message: `Conversation call initiated to ${to}. The AI will have a ${max_turns || 5}-turn conversation.`,
+                call_control_id,
+                tip: 'Wait for the call to complete, then use check_call_result to see the full conversation transcript.'
+              });
+            } catch (e) {
+              reject(new Error(`Failed to register conversation: ${e.message}`));
+            }
+          }
+        }
+      });
+
+      this.sendToChild(dialRequest);
+    });
   }
 }
 

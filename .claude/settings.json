@@ -1,0 +1,49 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker compose:*)",
+      "Bash(docker compose build:*)",
+      "Bash(docker compose logs:*)",
+      "Bash(docker compose ps:*)",
+      "Bash(npm run:*)",
+      "Bash(npm test:*)",
+      "Bash(npx:*)",
+      "Bash(jq:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "WebFetch(domain:developers.telnyx.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:code.claude.com)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(**/secrets/**)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '📞 Telnyx MCP Server - Ready for development' && docker compose ps --format '{{.Names}}: {{.Status}}' 2>/dev/null || echo 'Docker not running'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | jq -e '.file_path | endswith(\".js\")' > /dev/null 2>&1; then echo 'JS file modified - consider running: docker compose build'; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

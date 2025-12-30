@@ -13,6 +13,8 @@ services:
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
       - ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID:-}
       - ENABLE_TRANSCRIPTION=${ENABLE_TRANSCRIPTION:-false}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
       - PORT=3003
     restart: unless-stopped
     healthcheck:
