@@ -29,6 +29,9 @@ if (!ELEVENLABS_API_KEY) {
 // Store AMD results by call_control_id
 const amdResults = new Map();
 
+// Store final call results (for check_call_result tool)
+const callResults = new Map();
+
 console.log(`[auth-proxy] Starting supergateway on internal port ${SUPERGATEWAY_PORT}...`);
 
 // Use our custom MCP wrapper that adds call_and_speak tool
@@ -99,6 +102,25 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'telnyx-mcp-server' });
 });
 
+// Call result lookup (used by check_call_result tool)
+app.get('/call-result/:callControlId', (req, res) => {
+  const callControlId = req.params.callControlId;
+  const result = callResults.get(callControlId);
+
+  if (!result) {
+    return res.json({
+      found: false,
+      message: 'Call not found or not yet answered. The call may still be ringing.'
+    });
+  }
+
+  res.json({
+    found: true,
+    call_control_id: callControlId,
+    ...result
+  });
+});
+
 // Telnyx webhook handler (no auth - Telnyx signs these)
 app.post('/webhook', express.json(), async (req, res) => {
   const event = req.body?.data;
@@ -120,37 +142,36 @@ app.post('/webhook', express.json(), async (req, res) => {
     console.log(`[webhook] AMD result for ${callControlId}: ${result}`);
     amdResults.set(callControlId, result);
 
-    // If machine detected, hang up immediately
-    if (result === 'machine') {
-      console.log(`[webhook] Voicemail detected - hanging up without leaving message`);
-      try {
-        await fetch(
-          `https://api.telnyx.com/v2/calls/${callControlId}/actions/hangup`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${TELNYX_API_KEY}`
-            },
-            body: JSON.stringify({})
-          }
-        );
-      } catch (e) {
-        console.error(`[webhook] Error hanging up on voicemail: ${e.message}`);
-      }
-    }
+    // Also store in callResults for later querying
+    callResults.set(callControlId, {
+      answered_by: result,
+      status: 'in_progress',
+      timestamp: new Date().toISOString()
+    });
   }
 
-  // Handle call.answered - speak the message from client_state (only if human)
+  // Handle call.hangup - finalize call result
+  if (eventType === 'call.hangup' && callControlId) {
+    const existing = callResults.get(callControlId) || {};
+    callResults.set(callControlId, {
+      ...existing,
+      status: 'completed',
+      hangup_cause: event.payload?.hangup_cause,
+      completed_at: new Date().toISOString()
+    });
+    console.log(`[webhook] Call completed: ${JSON.stringify(callResults.get(callControlId))}`);
+
+    // Clean up after 5 minutes
+    setTimeout(() => callResults.delete(callControlId), 5 * 60 * 1000);
+  }
+
+  // Handle call.answered - speak the message from client_state
   if (eventType === 'call.answered' && callControlId) {
-    // Check AMD result - skip if machine was detected
     const amdResult = amdResults.get(callControlId);
-    if (amdResult === 'machine') {
-      console.log(`[webhook] Skipping TTS - voicemail was detected`);
+    if (amdResult) {
+      console.log(`[webhook] Call answered by: ${amdResult.toUpperCase()}`);
       amdResults.delete(callControlId);
-      return res.sendStatus(200);
     }
-    amdResults.delete(callControlId); // Clean up
     let message = 'Hello, this is a call from your AI assistant.';
 
     // Decode client_state if present

@@ -11,15 +11,42 @@
 const { spawn } = require('child_process');
 const readline = require('readline');
 
+// Server URL for internal API calls
+const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3003';
+
 // Custom tools we're adding
 const CUSTOM_TOOLS = {
+  check_call_result: {
+    name: 'check_call_result',
+    description: `Check if a call was answered by a human or went to voicemail.
+
+Use this after making a call with call_and_speak to find out what happened.
+Wait at least 30 seconds after initiating the call before checking.
+
+Returns:
+- answered_by: 'human' if a person answered, 'machine' if voicemail, 'not_sure' if unclear
+- status: 'in_progress' if call is still active, 'completed' if call has ended
+- hangup_cause: reason the call ended (if completed)
+
+Example use case: After a wake-up call, check if the user picked up. If they didn't (machine/voicemail), you can shame them for sleeping through it!`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        call_control_id: {
+          type: 'string',
+          description: 'The call_control_id returned from call_and_speak'
+        }
+      },
+      required: ['call_control_id']
+    }
+  },
   call_and_speak: {
     name: 'call_and_speak',
-    description: `Make an outbound phone call and automatically speak a message when answered by a HUMAN.
+    description: `Make an outbound phone call and automatically speak a message when answered.
 
-Uses Answering Machine Detection (AMD) to determine if a human or voicemail answers:
-- If a HUMAN answers: speaks the message, then hangs up
-- If VOICEMAIL answers: hangs up immediately without leaving a message
+Uses Answering Machine Detection (AMD) to determine if a human or voicemail answers.
+The message will be spoken either way, but the server logs will show whether it was
+answered by a human or went to voicemail.
 
 This is the recommended way to make calls with voice messages.
 
@@ -226,6 +253,8 @@ class MCPWrapper {
 
       if (toolName === 'call_and_speak') {
         result = await this.callAndSpeak(args);
+      } else if (toolName === 'check_call_result') {
+        result = await this.checkCallResult(args);
       } else {
         throw new Error(`Unknown custom tool: ${toolName}`);
       }
@@ -284,9 +313,25 @@ class MCPWrapper {
           if (response.result?.isError) {
             reject(new Error(response.result.content?.[0]?.text || 'dial_calls failed'));
           } else {
+            // Try to extract call_control_id from the response
+            let call_control_id = null;
+            try {
+              const content = response.result?.content?.[0]?.text;
+              if (content) {
+                const parsed = JSON.parse(content);
+                call_control_id = parsed?.data?.call_control_id;
+              }
+            } catch (e) {
+              // Ignore parse errors
+            }
+
             resolve({
               success: true,
               message: `Call initiated to ${to}. The message "${message}" will be spoken when the call is answered.`,
+              call_control_id,
+              tip: call_control_id
+                ? 'Use check_call_result with this call_control_id after ~30 seconds to see if a human answered or it went to voicemail.'
+                : null,
               dial_response: response.result
             });
           }
@@ -295,6 +340,43 @@ class MCPWrapper {
 
       this.sendToChild(dialRequest);
     });
+  }
+
+  async checkCallResult(args) {
+    const { call_control_id } = args;
+
+    if (!call_control_id) {
+      throw new Error('Missing required parameter: call_control_id');
+    }
+
+    try {
+      const response = await fetch(`${SERVER_URL}/call-result/${call_control_id}`);
+      const result = await response.json();
+
+      if (!result.found) {
+        return {
+          found: false,
+          message: 'Call not found. It may still be ringing, or the call_control_id is incorrect. Try again in a few seconds.'
+        };
+      }
+
+      // Add human-friendly interpretation
+      let interpretation;
+      if (result.answered_by === 'human') {
+        interpretation = 'A human answered the call.';
+      } else if (result.answered_by === 'machine') {
+        interpretation = 'The call went to voicemail.';
+      } else {
+        interpretation = 'Could not determine if human or voicemail.';
+      }
+
+      return {
+        ...result,
+        interpretation
+      };
+    } catch (e) {
+      throw new Error(`Failed to check call result: ${e.message}`);
+    }
   }
 }
 
