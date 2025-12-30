@@ -18,17 +18,26 @@ const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3003';
 const CUSTOM_TOOLS = {
   check_call_result: {
     name: 'check_call_result',
-    description: `Check if a call was answered by a human or went to voicemail.
+    description: `Check what happened on a call and get the transcription of what the person said.
 
-Use this after making a call with call_and_speak to find out what happened.
-Wait at least 30 seconds after initiating the call before checking.
+IMPORTANT: You MUST call this after every call_and_speak to see the result!
+Wait at least 45 seconds after initiating the call, then check.
 
 Returns:
-- answered_by: 'human' if a person answered, 'machine' if voicemail, 'not_sure' if unclear
-- status: 'in_progress' if call is still active, 'completed' if call has ended
-- hangup_cause: reason the call ended (if completed)
+- answered_by: 'human' or 'voicemail'
+- status: 'in_progress' or 'completed'
+- transcription.text: What the person said (their actual words!)
+- hangup_cause: reason the call ended
 
-Example use case: After a wake-up call, check if the user picked up. If they didn't (machine/voicemail), you can shame them for sleeping through it!`,
+Example workflow:
+1. Call call_and_speak to make the call
+2. Wait 45 seconds
+3. Call check_call_result with the call_control_id
+4. Read the transcription to see what they said!
+
+Use cases:
+- Wake-up call: Check if they answered. If voicemail, shame them!
+- Any call: See exactly what the person said in response`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -42,19 +51,26 @@ Example use case: After a wake-up call, check if the user picked up. If they did
   },
   call_and_speak: {
     name: 'call_and_speak',
-    description: `Make an outbound phone call and automatically speak a message when answered.
+    description: `Make an outbound phone call and speak a message when answered.
 
-Uses Answering Machine Detection (AMD) to determine if a human or voicemail answers.
-The message will be spoken either way, but the server logs will show whether it was
-answered by a human or went to voicemail.
+The call will:
+1. Dial the number
+2. Play your message when answered
+3. Wait 30 seconds for the person to respond (their speech is transcribed!)
+4. Hang up automatically
 
-This is the recommended way to make calls with voice messages.
+IMPORTANT: After calling this, you MUST wait ~45 seconds then call check_call_result
+with the returned call_control_id to see:
+- Whether a human or voicemail answered
+- The transcription of what they said!
 
 Example: To call someone and say "Hello, this is your reminder!", use:
 - to: "+15551234567"
 - from: "+15559876543" (your Telnyx number)
 - message: "Hello, this is your reminder!"
-- connection_id: (your call control app ID)`,
+- connection_id: (your call control app ID)
+
+Then wait 45 seconds and call check_call_result with the call_control_id.`,
     inputSchema: {
       type: 'object',
       properties: {
