@@ -38,7 +38,7 @@ cd /opt/stacks/telnyx-mcp-server
 ### 2. Clone or copy files
 Option A - Clone from GitHub:
 ```bash
-git clone https://github.com/youruser/poke-call-me-maybe.git .
+git clone https://github.com/stets/poke-call-me-maybe.git .
 ```
 
 Option B - Copy docker-compose.yml directly:
