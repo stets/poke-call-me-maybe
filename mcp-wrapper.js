@@ -15,9 +15,13 @@ const readline = require('readline');
 const CUSTOM_TOOLS = {
   call_and_speak: {
     name: 'call_and_speak',
-    description: `Make an outbound phone call and automatically speak a message when the call is answered.
+    description: `Make an outbound phone call and automatically speak a message when answered by a HUMAN.
 
-This is the recommended way to make calls with voice messages. The message will be spoken using text-to-speech as soon as the recipient answers.
+Uses Answering Machine Detection (AMD) to determine if a human or voicemail answers:
+- If a HUMAN answers: speaks the message, then hangs up
+- If VOICEMAIL answers: hangs up immediately without leaving a message
+
+This is the recommended way to make calls with voice messages.
 
 Example: To call someone and say "Hello, this is your reminder!", use:
 - to: "+15551234567"
@@ -257,7 +261,7 @@ class MCPWrapper {
       // Encode message as base64 client_state
       const clientState = Buffer.from(JSON.stringify({ message })).toString('base64');
 
-      // Call dial_calls via child process
+      // Call dial_calls via child process with AMD enabled
       const dialRequest = {
         jsonrpc: '2.0',
         id: this.requestId++,
@@ -268,7 +272,8 @@ class MCPWrapper {
             connection_id,
             to,
             from,
-            client_state: clientState
+            client_state: clientState,
+            answering_machine_detection: 'detect'  // Enable AMD
           }
         }
       };

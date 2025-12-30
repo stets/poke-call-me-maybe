@@ -26,6 +26,9 @@ if (!ELEVENLABS_API_KEY) {
   console.warn('WARNING: ELEVENLABS_API_KEY not set - using Telnyx built-in TTS (lower quality)');
 }
 
+// Store AMD results by call_control_id
+const amdResults = new Map();
+
 console.log(`[auth-proxy] Starting supergateway on internal port ${SUPERGATEWAY_PORT}...`);
 
 // Use our custom MCP wrapper that adds call_and_speak tool
@@ -111,8 +114,43 @@ app.post('/webhook', express.json(), async (req, res) => {
 
   console.log(`[webhook] Received event: ${eventType}`);
 
-  // Handle call.answered - speak the message from client_state
+  // Handle AMD result - store it for when call.answered fires
+  if (eventType === 'call.machine.detection.ended' && callControlId) {
+    const result = event.payload?.result; // 'human', 'machine', 'not_sure', 'unknown'
+    console.log(`[webhook] AMD result for ${callControlId}: ${result}`);
+    amdResults.set(callControlId, result);
+
+    // If machine detected, hang up immediately
+    if (result === 'machine') {
+      console.log(`[webhook] Voicemail detected - hanging up without leaving message`);
+      try {
+        await fetch(
+          `https://api.telnyx.com/v2/calls/${callControlId}/actions/hangup`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${TELNYX_API_KEY}`
+            },
+            body: JSON.stringify({})
+          }
+        );
+      } catch (e) {
+        console.error(`[webhook] Error hanging up on voicemail: ${e.message}`);
+      }
+    }
+  }
+
+  // Handle call.answered - speak the message from client_state (only if human)
   if (eventType === 'call.answered' && callControlId) {
+    // Check AMD result - skip if machine was detected
+    const amdResult = amdResults.get(callControlId);
+    if (amdResult === 'machine') {
+      console.log(`[webhook] Skipping TTS - voicemail was detected`);
+      amdResults.delete(callControlId);
+      return res.sendStatus(200);
+    }
+    amdResults.delete(callControlId); // Clean up
     let message = 'Hello, this is a call from your AI assistant.';
 
     // Decode client_state if present
