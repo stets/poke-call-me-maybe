@@ -5,10 +5,13 @@ A Docker-ready MCP (Model Context Protocol) server that enables AI assistants to
 ## Features
 
 - **`call_and_speak` Tool** - Simple tool for AI assistants to make calls with voice messages
+- **`check_call_result` Tool** - Check if a call was answered by a human or went to voicemail
+- **Voicemail Detection** - Uses transcription to reliably detect voicemail vs human
 - **Eleven Labs TTS** - Natural-sounding voices (optional, falls back to Telnyx TTS)
 - **Bearer Token Auth** - Secure API key protection for your MCP endpoint
 - **SSE Transport** - HTTP-accessible MCP server for easy integration
 - **Webhook Handler** - Automatically speaks message when call is answered
+- **Auto-Hangup** - Hangs up after message plays (no 2-minute voicemails!)
 - **Docker Ready** - Easy deployment with Docker Compose
 
 ## How It Works
@@ -66,6 +69,7 @@ docker compose up -d
 | Tool | Description |
 |------|-------------|
 | `call_and_speak` | Make a call and speak a message when answered |
+| `check_call_result` | Check if a call was answered by human or voicemail |
 | `list_call_control_applications` | List your Telnyx call control apps (to get connection_id) |
 | `hangup_calls_actions` | Hang up an active call |
 
@@ -77,6 +81,34 @@ docker compose up -d
 | `to` | Yes | Destination phone number (E.164 format: +15551234567) |
 | `from` | Yes | Your Telnyx phone number (E.164 format) |
 | `message` | Yes | Message to speak when call is answered |
+
+### check_call_result Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `call_control_id` | Yes | The call_control_id returned from call_and_speak |
+
+Returns:
+- `answered_by`: `"human"` or `"voicemail"` (when transcription enabled)
+- `status`: `"in_progress"` or `"completed"`
+- `transcription`: The actual transcription text (if enabled)
+
+## Voicemail Detection
+
+The server can detect whether a call was answered by a human or went to voicemail.
+
+### Transcription-Based Detection (Recommended)
+
+When `ENABLE_TRANSCRIPTION=true`, the server:
+1. Transcribes the inbound audio when the call is answered
+2. Analyzes the transcription for voicemail phrases like "leave a message"
+3. Provides reliable detection with the actual transcript
+
+**Cost**: ~$0.0125 (1.25 cents) per 30 seconds of audio
+
+### AMD-Based Detection (Fallback)
+
+Answering Machine Detection (AMD) is enabled by default but is less reliable with modern smartphones. It may misclassify voicemail as human, especially with natural-sounding greetings.
 
 ## API Endpoints
 
@@ -129,6 +161,7 @@ Browse all voices: [elevenlabs.io/voice-library](https://elevenlabs.io/voice-lib
 | `MCP_API_KEY` | Yes | Bearer token for MCP authentication |
 | `ELEVENLABS_API_KEY` | No | Eleven Labs API key (for better voices) |
 | `ELEVENLABS_VOICE_ID` | No | Eleven Labs voice ID (default: Sarah) |
+| `ENABLE_TRANSCRIPTION` | No | Enable transcription-based voicemail detection (default: false) |
 | `PORT` | No | Server port (default: 3000) |
 
 ## Architecture
