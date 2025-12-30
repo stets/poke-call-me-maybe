@@ -22,7 +22,7 @@ Deploy the Telnyx MCP Server to the home server and expose it via Cloudflare Tun
 ## Environment Variables Needed
 ```bash
 TELNYX_API_KEY=your-telnyx-api-key
-MCP_API_KEY=your-mcp-api-key
+MCP_API_KEY=your-mcp-api-key  # Generate with: openssl rand -hex 32
 PORT=3000
 ```
 
@@ -119,7 +119,7 @@ curl -H "Authorization: Bearer your-mcp-api-key" https://telnyx.example.com/sse
 Once deployed:
 - **URL**: `https://telnyx.example.com/sse`
 - **Transport**: SSE
-- **Authorization Header**: `Bearer your-mcp-api-key`
+- **Authorization Header**: `Bearer <your-mcp-api-key>`
 
 ## Architecture
 ```
