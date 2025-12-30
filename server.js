@@ -394,32 +394,40 @@ app.post('/webhook', express.json(), async (req, res) => {
     }
   }
 
-  // Handle playback/speak ended - hang up the call
+  // Handle playback/speak ended - wait then hang up (gives time to respond)
   if ((eventType === 'call.playback.ended' || eventType === 'call.speak.ended') && callControlId) {
-    console.log(`[webhook] Audio finished, hanging up call...`);
+    const RESPONSE_TIMEOUT = 30000; // 30 seconds to respond
+    console.log(`[webhook] Audio finished, waiting ${RESPONSE_TIMEOUT/1000}s for response before hanging up...`);
 
-    try {
-      const hangupResponse = await fetch(
-        `https://api.telnyx.com/v2/calls/${callControlId}/actions/hangup`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${TELNYX_API_KEY}`
-          },
-          body: JSON.stringify({})
+    // Store timeout so we can cancel if call ends naturally
+    setTimeout(async () => {
+      try {
+        console.log(`[webhook] Response timeout reached, hanging up call...`);
+        const hangupResponse = await fetch(
+          `https://api.telnyx.com/v2/calls/${callControlId}/actions/hangup`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${TELNYX_API_KEY}`
+            },
+            body: JSON.stringify({})
+          }
+        );
+
+        if (hangupResponse.ok) {
+          console.log(`[webhook] Call hung up successfully`);
+        } else {
+          const error = await hangupResponse.text();
+          // Ignore errors if call already ended
+          if (!error.includes('not found')) {
+            console.error(`[webhook] Hangup failed: ${hangupResponse.status} - ${error}`);
+          }
         }
-      );
-
-      if (hangupResponse.ok) {
-        console.log(`[webhook] Call hung up successfully`);
-      } else {
-        const error = await hangupResponse.text();
-        console.error(`[webhook] Hangup failed: ${hangupResponse.status} - ${error}`);
+      } catch (e) {
+        console.error(`[webhook] Error hanging up: ${e.message}`);
       }
-    } catch (e) {
-      console.error(`[webhook] Error hanging up: ${e.message}`);
-    }
+    }, RESPONSE_TIMEOUT);
   }
 
   // Always respond 200 to acknowledge receipt
