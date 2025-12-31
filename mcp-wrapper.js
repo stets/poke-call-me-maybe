@@ -14,6 +14,9 @@ const readline = require('readline');
 // Server URL for internal API calls
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3003';
 
+// Default "from" number for outbound calls
+const DEFAULT_FROM_NUMBER = process.env.TELNYX_FROM_NUMBER;
+
 // Custom tools we're adding
 const CUSTOM_TOOLS = {
   check_call_result: {
@@ -65,7 +68,6 @@ with the returned call_control_id to see:
 
 Example: To call someone and say "Hello, this is your reminder!", use:
 - to: "+15551234567"
-- from: "+15559876543" (your Telnyx number)
 - message: "Hello, this is your reminder!"
 - connection_id: (your call control app ID)
 
@@ -83,14 +85,14 @@ Then wait 45 seconds and call check_call_result with the call_control_id.`,
         },
         from: {
           type: 'string',
-          description: 'The Telnyx phone number to call from in E.164 format'
+          description: 'Optional: The Telnyx phone number to call from. Uses the default configured number if not specified.'
         },
         message: {
           type: 'string',
           description: 'The message to speak when the call is answered (text-to-speech)'
         }
       },
-      required: ['connection_id', 'to', 'from', 'message']
+      required: ['connection_id', 'to', 'message']
     }
   },
   call_and_converse: {
@@ -129,7 +131,7 @@ Example - Wake up call with conversation:
         },
         from: {
           type: 'string',
-          description: 'The Telnyx phone number to call from in E.164 format'
+          description: 'Optional: The Telnyx phone number to call from. Uses the default configured number if not specified.'
         },
         system_prompt: {
           type: 'string',
@@ -144,7 +146,7 @@ Example - Wake up call with conversation:
           description: 'Maximum number of back-and-forth exchanges (default: 5)'
         }
       },
-      required: ['connection_id', 'to', 'from', 'system_prompt', 'initial_message']
+      required: ['connection_id', 'to', 'system_prompt', 'initial_message']
     }
   }
 };
@@ -361,10 +363,16 @@ class MCPWrapper {
 
   callAndSpeak(args) {
     return new Promise((resolve, reject) => {
-      const { connection_id, to, from, message } = args;
+      const { connection_id, to, message } = args;
+      const from = args.from || DEFAULT_FROM_NUMBER;
 
-      if (!connection_id || !to || !from || !message) {
-        reject(new Error('Missing required parameters: connection_id, to, from, message'));
+      if (!connection_id || !to || !message) {
+        reject(new Error('Missing required parameters: connection_id, to, message'));
+        return;
+      }
+
+      if (!from) {
+        reject(new Error('No "from" number provided and TELNYX_FROM_NUMBER environment variable is not set'));
         return;
       }
 
@@ -462,10 +470,16 @@ class MCPWrapper {
 
   callAndConverse(args) {
     return new Promise((resolve, reject) => {
-      const { connection_id, to, from, system_prompt, initial_message, max_turns } = args;
+      const { connection_id, to, system_prompt, initial_message, max_turns } = args;
+      const from = args.from || DEFAULT_FROM_NUMBER;
 
-      if (!connection_id || !to || !from || !system_prompt || !initial_message) {
-        reject(new Error('Missing required parameters: connection_id, to, from, system_prompt, initial_message'));
+      if (!connection_id || !to || !system_prompt || !initial_message) {
+        reject(new Error('Missing required parameters: connection_id, to, system_prompt, initial_message'));
+        return;
+      }
+
+      if (!from) {
+        reject(new Error('No "from" number provided and TELNYX_FROM_NUMBER environment variable is not set'));
         return;
       }
 
